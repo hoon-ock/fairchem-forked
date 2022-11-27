@@ -1,0 +1,19 @@
+trainer: mae-list #energy (base), correlation, delta, sigma, list, rankprob
+
+dataset:
+  - src: /home/jovyan/energy_difference/site_swap/data/adslab_split2/train.lmdb
+    normalize_labels: True
+    target_mean: -1.0396089952600043 
+    target_std: 1.9741169321117555 
+  - src: /home/jovyan/energy_difference/site_swap/data/adslab_split2/val.lmdb 
+  - src: /home/jovyan/energy_difference/site_swap/data/adslab_split2/train.lmdb 
+
+logger: wandb
+
+task:
+  dataset: single_point_lmdb
+  description: "Relaxed state energy prediction from initial structure."
+  type: regression
+  metric: mae
+  labels:
+    - relaxed energy
