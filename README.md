@@ -1,6 +1,7 @@
 # `ocp` by Open Catalyst Project
 
 [![CircleCI](https://circleci.com/gh/Open-Catalyst-Project/ocp.svg?style=shield)](https://circleci.com/gh/Open-Catalyst-Project/ocp)
+[![codecov](https://codecov.io/gh/Open-Catalyst-Project/ocp/branch/codecov/graph/badge.svg?token=M606LH5LK6)](https://codecov.io/gh/Open-Catalyst-Project/ocp)
 
 `ocp` is the [Open Catalyst Project](https://opencatalystproject.org/)'s
 library of state-of-the-art machine learning algorithms for catalysis.
@@ -11,8 +12,9 @@ library of state-of-the-art machine learning algorithms for catalysis.
 
 It provides training and evaluation code for tasks and models that take arbitrary
 chemical structures as input to predict energies / forces / positions, and can
-be used as a base scaffold for research projects. Please read the
-[OC20 paper](https://arxiv.org/abs/2010.09990) for an overview of tasks, data and metrics.
+be used as a base scaffold for research projects. For an overview of tasks, data, and metrics, please read our papers:
+ - [OC20](https://arxiv.org/abs/2010.09990)
+ - [OC22](https://arxiv.org/abs/2206.08917)
 
 Projects developed on `ocp`:
 
@@ -24,6 +26,9 @@ Projects developed on `ocp`:
 - SpinConv [[`arXiv`](https://arxiv.org/abs/2106.09575)] [[`code`](https://github.com/Open-Catalyst-Project/ocp/blob/main/ocpmodels/models/spinconv.py)]
 - GemNet-dT [[`arXiv`](https://arxiv.org/abs/2106.08903)] [[`code`](https://github.com/Open-Catalyst-Project/ocp/tree/main/ocpmodels/models/gemnet)]
 - PaiNN [[`arXiv`](https://arxiv.org/abs/2102.03150)] [[`code`](https://github.com/Open-Catalyst-Project/ocp/tree/main/ocpmodels/models/painn)]
+- Graph Parallelism [[`arXiv`](https://arxiv.org/abs/2203.09697)] [[`code`](https://github.com/Open-Catalyst-Project/ocp/tree/main/ocpmodels/models/gemnet_gp)]
+- GemNet-OC [[`arXiv`](https://arxiv.org/abs/2204.02782)] [[`code`](https://github.com/Open-Catalyst-Project/ocp/tree/main/ocpmodels/models/gemnet_oc)]
+- SCN [[`arXiv`](https://arxiv.org/abs/2206.14331)] [[`code`](https://github.com/Open-Catalyst-Project/ocp/tree/main/ocpmodels/models/scn)]
 
 ## Installation
 

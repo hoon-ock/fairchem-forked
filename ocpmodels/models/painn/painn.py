@@ -36,25 +36,28 @@ from typing import Optional, Tuple
 
 import torch
 from torch import nn
-from torch_geometric.nn import MessagePassing
+from torch_geometric.nn import MessagePassing, radius_graph
 from torch_scatter import scatter, segment_coo
 
 from ocpmodels.common.registry import registry
 from ocpmodels.common.utils import (
+    compute_neighbors,
     conditional_grad,
     get_pbc_distances,
     radius_graph_pbc,
 )
+from ocpmodels.models.base import BaseModel
 from ocpmodels.models.gemnet.layers.base_layers import ScaledSiLU
 from ocpmodels.models.gemnet.layers.embedding_block import AtomEmbedding
 from ocpmodels.models.gemnet.layers.radial_basis import RadialBasis
+from ocpmodels.modules.scaling import ScaleFactor
+from ocpmodels.modules.scaling.compat import load_scales_compat
 
-from .scaling import ScaledModule, ScalingFactor
 from .utils import get_edge_id, repeat_blocks
 
 
 @registry.register_model("painn")
-class PaiNN(ScaledModule):
+class PaiNN(BaseModel):
     r"""PaiNN model based on the description in Schütt et al. (2021):
     Equivariant message passing for the prediction of tensorial properties
     and molecular spectra, https://arxiv.org/abs/2102.03150.
@@ -72,11 +75,12 @@ class PaiNN(ScaledModule):
         max_neighbors=50,
         rbf: dict = {"name": "gaussian"},
         envelope: dict = {"name": "polynomial", "exponent": 5},
-        scale_file: Optional[str] = None,
         regress_forces=True,
         direct_forces=True,
         use_pbc=True,
         otf_graph=True,
+        num_elements=83,
+        scale_file: Optional[str] = None,
     ):
         super(PaiNN, self).__init__()
 
@@ -85,7 +89,6 @@ class PaiNN(ScaledModule):
         self.num_rbf = num_rbf
         self.cutoff = cutoff
         self.max_neighbors = max_neighbors
-        self.scale_file = scale_file
         self.regress_forces = regress_forces
         self.direct_forces = direct_forces
         self.otf_graph = otf_graph
@@ -96,7 +99,7 @@ class PaiNN(ScaledModule):
 
         #### Learnable parameters #############################################
 
-        self.atom_emb = AtomEmbedding(hidden_channels)
+        self.atom_emb = AtomEmbedding(hidden_channels, num_elements)
 
         self.radial_basis = RadialBasis(
             num_radial=num_rbf,
@@ -113,7 +116,7 @@ class PaiNN(ScaledModule):
                 PaiNNMessage(hidden_channels, num_rbf).jittable()
             )
             self.update_layers.append(PaiNNUpdate(hidden_channels))
-            setattr(self, "upd_out_scalar_scale_%d" % i, ScalingFactor())
+            setattr(self, "upd_out_scalar_scale_%d" % i, ScaleFactor())
 
         self.out_energy = nn.Sequential(
             nn.Linear(hidden_channels, hidden_channels // 2),
@@ -126,20 +129,9 @@ class PaiNN(ScaledModule):
 
         self.inv_sqrt_2 = 1 / math.sqrt(2.0)
 
-        # Load scaling factors
-        if scale_file is not None:
-            if os.path.isfile(scale_file):
-                logging.info(f"Loading scaling factors from {scale_file}")
-                scales = torch.load(scale_file, map_location="cpu")
-                self.load_scales(scales)
-            else:
-                logging.warning(
-                    f"Scale file '{scale_file}' does not exist. "
-                    f"The model will use unit scaling factors "
-                    f"unless it was loaded from a checkpoint."
-                )
-
         self.reset_parameters()
+
+        load_scales_compat(self, scale_file)
 
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.out_energy[0].weight)
@@ -280,7 +272,7 @@ class PaiNN(ScaledModule):
 
             # Create indexing array
             edge_reorder_idx = repeat_blocks(
-                neighbors_per_image // 2,
+                torch.div(neighbors_per_image, 2, rounding_mode="floor"),
                 repeats=2,
                 continuous_indexing=True,
                 repeat_inc=edge_index_new.size(1),
@@ -328,33 +320,22 @@ class PaiNN(ScaledModule):
             id_swap,
         )
 
-    def generate_graph(self, data):
-        otf_graph = (
-            self.cutoff > 6 or self.max_neighbors > 50 or self.otf_graph
-        )
+    def generate_graph_values(self, data):
+        (
+            edge_index,
+            edge_dist,
+            distance_vec,
+            cell_offsets,
+            _,  # cell offset distances
+            neighbors,
+        ) = self.generate_graph(data)
 
-        if self.use_pbc and otf_graph:
-            edge_index, cell_offsets, neighbors = radius_graph_pbc(
-                data, self.cutoff, self.max_neighbors
-            )
-
-            out = get_pbc_distances(
-                data.pos,
-                edge_index,
-                data.cell,
-                cell_offsets,
-                neighbors,
-                return_offsets=False,
-                return_distance_vec=True,
-            )
-
-            edge_index = out["edge_index"]
-            edge_dist = out["distances"]
-            # Unit vectors pointing from edge_index[1] to edge_index[0],
-            # i.e., edge_index[0] - edge_index[1] divided by the norm.
-            edge_vector = out["distance_vec"] / edge_dist[:, None]
-        else:
-            raise NotImplementedError
+        # Unit vectors pointing from edge_index[1] to edge_index[0],
+        # i.e., edge_index[0] - edge_index[1] divided by the norm.
+        # make sure that the distances are not close to zero before dividing
+        mask_zero = torch.isclose(edge_dist, torch.tensor(0.0), atol=1e-6)
+        edge_dist[mask_zero] = 1.0e-6
+        edge_vector = distance_vec / edge_dist[:, None]
 
         empty_image = neighbors == 0
         if torch.any(empty_image):
@@ -403,7 +384,7 @@ class PaiNN(ScaledModule):
             edge_dist,
             edge_vector,
             id_swap,
-        ) = self.generate_graph(data)
+        ) = self.generate_graph_values(data)
 
         assert z.dim() == 1 and z.dtype == torch.long
 
@@ -439,12 +420,15 @@ class PaiNN(ScaledModule):
                 forces = self.out_forces(x, vec)
                 return energy, forces
             else:
-                forces = -1 * torch.autograd.grad(
-                    x,
-                    pos,
-                    grad_outputs=torch.ones_like(x),
-                    create_graph=True,
-                )[0]
+                forces = (
+                    -1
+                    * torch.autograd.grad(
+                        x,
+                        pos,
+                        grad_outputs=torch.ones_like(x),
+                        create_graph=True,
+                    )[0]
+                )
                 return energy, forces
         else:
             return energy
@@ -541,7 +525,7 @@ class PaiNNMessage(MessagePassing):
         return inputs
 
 
-class PaiNNUpdate(ScaledModule):
+class PaiNNUpdate(nn.Module):
     def __init__(self, hidden_channels):
         super().__init__()
         self.hidden_channels = hidden_channels
@@ -577,7 +561,7 @@ class PaiNNUpdate(ScaledModule):
         # Add an epsilon offset to make sure sqrt is always positive.
         x_vec_h = self.xvec_proj(
             torch.cat(
-                [x, torch.sqrt(torch.sum(vec2 ** 2, dim=-2) + 1e-8)], dim=-1
+                [x, torch.sqrt(torch.sum(vec2**2, dim=-2) + 1e-8)], dim=-1
             )
         )
         xvec1, xvec2, xvec3 = torch.split(
