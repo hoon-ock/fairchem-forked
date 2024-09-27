@@ -9,7 +9,7 @@ import numpy as np
 import scipy
 from ase.data import atomic_numbers, covalent_radii
 from ase.geometry import wrap_positions
-from fairchem.data.oc.core.adsorbate import randomly_rotate_adsorbate
+from fairchem.data.oc.core.adsorbate import randomly_rotate_adsorbate, rotate_adsorbate_side_on
 from pymatgen.analysis.adsorption import AdsorbateSiteFinder
 from pymatgen.io.ase import AseAtomsAdaptor
 from scipy.optimize import fsolve
@@ -59,6 +59,13 @@ class AdsorbateSlabConfig:
         only slight rotation along x and y, and place it such that the binding
         atom is at the site.
 
+        In "llm-guided", we place the initial configuration based on the guidance
+        provided by a large language model (LLM) agent.
+
+        In "llm-guided_site_heuristic_placement", we place the initial configuration
+        based on the guidance provided by a large language model (LLM) agent, but
+        we also use a heuristic approach for the placement of the adsorbate.
+
         In all cases, the adsorbate is placed at the closest position of no
         overlap with the slab plus `interstitial_gap` along the surface normal.
     """
@@ -71,8 +78,9 @@ class AdsorbateSlabConfig:
         num_augmentations_per_site: int = 1,
         interstitial_gap: float = 0.1,
         mode: str = "random",
+        **kwargs,
     ):
-        assert mode in ["random", "heuristic", "random_site_heuristic_placement"]
+        assert mode in ["random", "heuristic", "random_site_heuristic_placement", "llm-guided", "llm-guided_site_heuristic_placement"]
         assert interstitial_gap < 5
         assert interstitial_gap >= 0
 
@@ -82,8 +90,18 @@ class AdsorbateSlabConfig:
         self.num_augmentations_per_site = num_augmentations_per_site
         self.interstitial_gap = interstitial_gap
         self.mode = mode
-
-        self.sites = self.get_binding_sites(num_sites)
+        if "llm-guided" not in self.mode:
+            self.sites = self.get_binding_sites(num_sites)
+        elif "llm-guided" in self.mode:
+            assert 'site_type' in kwargs and 'site_atoms' in kwargs, "'site_type' and 'site_atoms' must be provided in kwargs."
+            site_type = kwargs['site_type']
+            site_atoms = kwargs['site_atoms']
+            random_ratio = kwargs.get('random_ratio', 0.2)
+            cutoff_multiplier = kwargs.get('cutoff_multiplier', 1.1)
+            self.sites = self.get_llm_guided_binding_sites(
+                num_sites, site_type, site_atoms, random_ratio, cutoff_multiplier
+            )
+            
         self.atoms_list, self.metadata_list = self.place_adsorbate_on_sites(
             self.sites,
             num_augmentations_per_site,
@@ -97,7 +115,7 @@ class AdsorbateSlabConfig:
         assert self.slab.has_surface_tagged()
 
         all_sites = []
-        if self.mode in ["random", "random_site_heuristic_placement"]:
+        if self.mode in ["random", "random_site_heuristic_placement", "llm-guided", "llm-guided_site_heuristic_placement"]:
             # The Delaunay triangulation of surface atoms doesn't take PBC into
             # account, so we end up undersampling triangles near the edges of
             # the central unit cell. To avoid that, we explicitly tile the slab
@@ -186,6 +204,80 @@ class AdsorbateSlabConfig:
         else:
             raise NotImplementedError
 
+    def get_llm_guided_binding_sites(self, 
+                                     num_sites: int, 
+                                     site_type: str, 
+                                     site_atoms: str | list[str],
+                                     random_ratio: float=0.2, 
+                                     cutoff_multiplier: float = 1.1
+                                     ):
+  
+        
+        # Ensure the mode is 'llm-guided'
+        assert self.mode in ["llm-guided", "llm-guided_site_heuristic_placement"], "Invalid mode for LLM-guided binding site selection."
+        # Ensure required keyword arguments are provided
+        # assert "site_type" in kwargs and "site_atoms" in kwargs, "'site_type' and 'site_atoms' must be provided in kwargs."
+    
+        
+        # Convert site_atoms to atomic numbers if they are given as element symbols
+        if isinstance(site_atoms, str):
+            site_atoms = [element.strip() for element in site_atoms.split(',')]
+        elif isinstance(site_atoms, list):
+            site_atoms = [element.strip() for element in site_atoms]
+        
+        #[atomic_numbers[atom] if isinstance(atom, str) else atom for atom in site_atoms]
+        
+        # Calculate the number of heuristic and random sites needed
+        heuristic_num = int(num_sites * (1 - random_ratio))
+        
+    
+        # Initialize list to hold heuristic sites and define surface properties
+        heuristic_sites = []
+        site_properties = {"surface_properties": []}
+    
+        # Assign "surface" or "subsurface" properties based on atom tags
+        for atom in self.slab.atoms:
+            if atom.tag == 1:
+                site_properties["surface_properties"].append("surface")
+            else:
+                site_properties["surface_properties"].append("subsurface")
+    
+        # Convert ASE slab to Pymatgen structure and copy site properties
+        struct = AseAtomsAdaptor.get_structure(self.slab.atoms)
+        struct = struct.copy(site_properties=site_properties)  # Ensure site properties are retained
+    
+        # Use AdsorbateSiteFinder to find heuristic adsorption sites
+        asf = AdsorbateSiteFinder(struct)
+        heuristic_sites += asf.find_adsorption_sites(distance=0)[site_type]
+        # randomly select heuristic sites if more than needed
+        np.random.shuffle(heuristic_sites)
+        if len(heuristic_sites) > heuristic_num:
+            heuristic_sites = np.array(heuristic_sites[:heuristic_num])
+            random_num = num_sites - heuristic_num
+        else:
+            heuristic_sites = np.array(heuristic_sites)
+            random_num = num_sites - heuristic_sites.shape[0]
+        
+        # Get random binding sites, if more are needed
+        random_sites = self.get_binding_sites(random_num) if random_num > 0 else np.array([])
+
+        # Combine heuristic and random sites
+        if random_sites.size > 0:
+            all_sites = np.concatenate((random_sites, heuristic_sites))
+        else:
+            all_sites = heuristic_sites
+        #####
+        # need to comment out
+        print('number of init candidate sites:', all_sites.shape[0])
+        assert all_sites.shape[0] == num_sites, "Number of sites does not match the expected number."
+    
+        # Filter sites that meet the criteria (atomic overlap and cutoff distance)
+        targeted_sites = find_targeted_sites(self.slab, all_sites, site_atoms, cutoff_multiplier=cutoff_multiplier)
+        #####
+        # need to comment out
+        print('number of llm-selected sites:', targeted_sites.shape[0])
+        return targeted_sites
+    
     def place_adsorbate_on_site(
         self,
         adsorbate: Adsorbate,
@@ -199,23 +291,51 @@ class AdsorbateSlabConfig:
         slab_c = self.slab.atoms.copy()
 
         binding_idx = None
-        if self.mode in ["heuristic", "random_site_heuristic_placement"]:
+        if self.mode == "llm-guided":
+            if len(adsorbate.binding_indices) == 1:
+
+                self.mode = 'llm-guided_site_heuristic_placement'
+
+            elif len(adsorbate.binding_indices) == 2:
+                binding_idx = adsorbate.binding_indices
+            
+            elif len(adsorbate.binding_indices) > 2:
+                non_H_indices = [i for i in adsorbate.binding_indices if adsorbate.atoms[i].symbol != 'H']
+                binding_idx = np.random.choice(non_H_indices, 2, replace=False)
+            
+                assert len(binding_idx) == 2, "Binding index must be of length 2 for LLM-guided mode."  
+
+
+        if self.mode in ["heuristic", "random_site_heuristic_placement", "llm-guided_site_heuristic_placement"]:
             binding_idx = np.random.choice(adsorbate.binding_indices)
 
         # Rotate adsorbate along xyz, only if adsorbate has more than 1 atom.
         sampled_angles = np.array([0, 0, 0])
-        if len(adsorbate.atoms) > 1:
+        if len(adsorbate.atoms) > 1 and self.mode in ["random", "heuristic", "random_site_heuristic_placement", "llm-guided_site_heuristic_placement"]:
             adsorbate_c, sampled_angles = randomly_rotate_adsorbate(
                 adsorbate_c,
                 mode=self.mode,
                 binding_idx=binding_idx,
             )
+        elif len(adsorbate.atoms) > 1 and self.mode == "llm-guided":
+            adsorbate_c, sampled_angles = rotate_adsorbate_side_on(
+                adsorbate_c,
+                binding_idx=binding_idx,
+                slab=self.slab
+            )
 
         # Translate adsorbate to binding site.
         if self.mode == "random":
             placement_center = adsorbate_c.get_center_of_mass()
-        elif self.mode in ["heuristic", "random_site_heuristic_placement"]:
+        elif self.mode in ["heuristic", "random_site_heuristic_placement", "llm-guided_site_heuristic_placement"]:
             placement_center = adsorbate_c.positions[binding_idx]
+        elif self.mode == "llm-guided":
+            pos1 = adsorbate_c.positions[binding_idx[0]]
+            pos2 = adsorbate_c.positions[binding_idx[1]]
+            weight1 = adsorbate_c.get_atomic_numbers()[binding_idx[0]]
+            weight2 = adsorbate_c.get_atomic_numbers()[binding_idx[1]]
+            placement_center = (pos1 * weight1 + pos2 * weight2) / (weight1 + weight2)
+
         else:
             raise NotImplementedError
 
@@ -551,3 +671,38 @@ def there_is_overlap(adsorbate_slab_config: ase.Atoms):
     """
     post_radial_distances = get_interstitial_distances(adsorbate_slab_config)
     return not all(np.array(post_radial_distances) >= 0)
+
+def find_targeted_sites(slab, binding_sites, site_atoms_list, cutoff_multiplier: float = 1.1):
+
+
+    # Ensure that the slab has properly tagged surface atoms
+    assert slab.has_surface_tagged(), "The slab must have surface atoms tagged (tag == 1) for this function."
+
+    targeted_sites = []
+
+    # Get surface atoms (tagged with tag==1)
+    surface_atoms = [atom for atom in slab.atoms if atom.tag == 1]
+
+    # Loop over each binding site and find the closest atoms within the cutoff radius
+    # average covalent radius for C, H, O, N 
+    avg_covalent_radii = np.mean([covalent_radii[atomic_numbers[atom]] for atom in ['C', 'H', 'O', 'N']])
+    # print(avg_covalent_radii)
+
+    for site in binding_sites:
+        site_binding_atoms = []
+        for atom in surface_atoms:
+            # Get the atomic number to retrieve the covalent radius
+            atomic_number = atomic_numbers[atom.symbol]
+            covalent_radius = (covalent_radii[atomic_number]+avg_covalent_radii) * cutoff_multiplier
+            
+            # Calculate distance from the binding site to the surface atom
+            distance = np.linalg.norm(atom.position - site)
+            if distance <= covalent_radius:
+                site_binding_atoms.append(atom.symbol)
+
+        # Check if the site matches the target atoms
+        if (len(site_binding_atoms) == len(site_atoms_list) and 
+            all(atom in site_binding_atoms for atom in site_atoms_list)):
+            targeted_sites.append(site)
+
+    return np.array(targeted_sites)
