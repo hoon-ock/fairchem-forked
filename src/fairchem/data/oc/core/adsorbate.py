@@ -170,6 +170,18 @@ def rotate_adsorbate(adsorbate, axis, angle, center):
 #     z_binding = (rot_pos1[2] * weight1 + rot_pos2[2] * weight2) / (weight1 + weight2)
 #     return z_binding - com[2]
 
+def random_orthogonal_vector(normal_vector):
+    # Step 1: Generate a random vector
+    random_vector = np.random.rand(3)
+    
+    # Step 2: Take the cross product of the random vector and the normal vector
+    orthogonal_vector = np.cross(normal_vector, random_vector)
+    
+    # Step 3: Normalize the orthogonal vector
+    orthogonal_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
+    
+    return orthogonal_vector
+
 def rotate_adsorbate_side_on(
         adsorbate: ase.Atoms,
         binding_idx: np.ndarray,  # Assuming this is a NumPy array
@@ -192,40 +204,11 @@ def rotate_adsorbate_side_on(
     surface_normal = np.cross(slab.atoms.cell[0], slab.atoms.cell[1])
     surface_normal = surface_normal / np.linalg.norm(surface_normal)
 
-    # Calculate the orthogonal vector and its rotation vector
-    orthogonal_vector = np.cross(vector_between, surface_normal)
-    orthogonal_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
-    rotvec = np.cross(surface_normal, orthogonal_vector)
-    rotvec = rotvec / np.linalg.norm(rotvec)
-    neg_rotvec = -rotvec  # Opposite direction of rotvec
-
-    # Rotate adsorbate in both directions (rotvec and neg_rotvec)
+    # random rotvec
+    rotvec = random_orthogonal_vector(surface_normal)
     adsorbate_c1 = adsorbate.copy()
-    adsorbate_c2 = adsorbate.copy()
     adsorbate_c1.rotate(a=vector_between, v=rotvec, center=placement_center)
-    adsorbate_c2.rotate(a=vector_between, v=neg_rotvec, center=placement_center)
-
-    # Get the center of mass (COM) for both rotations
-    com_c1 = adsorbate_c1.get_center_of_mass()
-    com_c2 = adsorbate_c2.get_center_of_mass()
-
-    # Compute the weighted average z-positions of the binding atoms for both rotations
-    z_binding_c1 = (adsorbate_c1.positions[binding_idx[0]][2] * weight1 + 
-                    adsorbate_c1.positions[binding_idx[1]][2] * weight2) / (weight1 + weight2)
-    z_binding_c2 = (adsorbate_c2.positions[binding_idx[0]][2] * weight1 + 
-                    adsorbate_c2.positions[binding_idx[1]][2] * weight2) / (weight1 + weight2)
-
-    # Compare the relative z-positions of the binding atoms to the center of mass (COM)
-    rel_z_diff_c1 = z_binding_c1 - com_c1[2]
-    rel_z_diff_c2 = z_binding_c2 - com_c2[2]
-
-    # Choose the rotation with the lower binding atoms relative to the COM
-    if rel_z_diff_c1 < rel_z_diff_c2:
-        print("Choosing rotvec")
-        chosen_rotvec, chosen_adsorbate = rotvec, adsorbate_c1
-    else:
-        print("Choosing neg_rotvec")
-        chosen_rotvec, chosen_adsorbate = neg_rotvec, adsorbate_c2
+    chosen_rotvec, chosen_adsorbate = rotvec, adsorbate_c1
 
     # Iterate through the angles, rotate the molecule, and calculate the z-difference
     min_z_diff = float('inf')
@@ -268,3 +251,102 @@ def rotate_adsorbate_side_on(
 
     # Return the final rotated adsorbate and the rotation details
     return optimal_adsorbate, [chosen_rotvec, optimal_angle]
+
+# def rotate_adsorbate_side_on(
+#         adsorbate: ase.Atoms,
+#         binding_idx: np.ndarray,  # Assuming this is a NumPy array
+#         slab: ase.Atoms,
+#     ) -> tuple[ase.Atoms, list]:
+
+#     # Get the positions and atomic weights of the binding atoms
+#     pos1 = adsorbate.positions[binding_idx[0]]
+#     pos2 = adsorbate.positions[binding_idx[1]]
+#     weight1 = adsorbate.get_atomic_numbers()[binding_idx[0]]
+#     weight2 = adsorbate.get_atomic_numbers()[binding_idx[1]]
+    
+#     # Calculate the placement center based on the weighted average of positions
+#     placement_center = (pos1 * weight1 + pos2 * weight2) / (weight1 + weight2)
+   
+#     # Calculate the vector between the two binding atoms
+#     vector_between = (pos2 - pos1) / np.linalg.norm(pos2 - pos1)
+    
+#     # Calculate the surface normal from the slab
+#     surface_normal = np.cross(slab.atoms.cell[0], slab.atoms.cell[1])
+#     surface_normal = surface_normal / np.linalg.norm(surface_normal)
+
+#     # Calculate the orthogonal vector and its rotation vector
+#     orthogonal_vector = np.cross(vector_between, surface_normal)
+#     orthogonal_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
+#     rotvec = np.cross(surface_normal, orthogonal_vector)
+#     rotvec = rotvec / np.linalg.norm(rotvec)
+#     neg_rotvec = -rotvec  # Opposite direction of rotvec
+
+#     # Rotate adsorbate in both directions (rotvec and neg_rotvec)
+#     adsorbate_c1 = adsorbate.copy()
+#     adsorbate_c2 = adsorbate.copy()
+#     adsorbate_c1.rotate(a=vector_between, v=rotvec, center=placement_center)
+#     adsorbate_c2.rotate(a=vector_between, v=neg_rotvec, center=placement_center)
+
+#     # Get the center of mass (COM) for both rotations
+#     com_c1 = adsorbate_c1.get_center_of_mass()
+#     com_c2 = adsorbate_c2.get_center_of_mass()
+
+#     # Compute the weighted average z-positions of the binding atoms for both rotations
+#     z_binding_c1 = (adsorbate_c1.positions[binding_idx[0]][2] * weight1 + 
+#                     adsorbate_c1.positions[binding_idx[1]][2] * weight2) / (weight1 + weight2)
+#     z_binding_c2 = (adsorbate_c2.positions[binding_idx[0]][2] * weight1 + 
+#                     adsorbate_c2.positions[binding_idx[1]][2] * weight2) / (weight1 + weight2)
+
+#     # Compare the relative z-positions of the binding atoms to the center of mass (COM)
+#     rel_z_diff_c1 = z_binding_c1 - com_c1[2]
+#     rel_z_diff_c2 = z_binding_c2 - com_c2[2]
+
+#     # Choose the rotation with the lower binding atoms relative to the COM
+#     if rel_z_diff_c1 < rel_z_diff_c2:
+#         print("Choosing rotvec")
+#         chosen_rotvec, chosen_adsorbate = rotvec, adsorbate_c1
+#     else:
+#         print("Choosing neg_rotvec")
+#         chosen_rotvec, chosen_adsorbate = neg_rotvec, adsorbate_c2
+
+#     # Iterate through the angles, rotate the molecule, and calculate the z-difference
+#     min_z_diff = float('inf')
+#     optimal_angle = 0
+#     optimal_adsorbate = None
+#     angles = np.linspace(0, 360, 20)
+#     # noise_strength = 3.0  # Adjust this value to control the noise level
+#     # random_noise = np.random.normal(0, noise_strength, angles.shape)  
+#     # angles += random_noise
+
+#     for angle in angles:
+#         # Rotate the adsorbate
+#         adsorbate_rotated = chosen_adsorbate.copy()
+#         adsorbate_rotated.rotate(angle, chosen_rotvec, center=placement_center)
+
+#         # Get the center of mass (COM) of the rotated adsorbate
+#         com = adsorbate_rotated.get_center_of_mass()
+
+#         # Compute the average z-position of the binding atoms
+#         z_binding = (adsorbate_rotated.positions[binding_idx[0]][2] * weight1 + 
+#                      adsorbate_rotated.positions[binding_idx[1]][2] * weight2) / (weight1 + weight2)
+
+#         # Calculate the difference between the binding atoms' z-position and the COM's z-position
+#         z_diff = z_binding - com[2]
+
+#         # Keep track of the angle that leads to the lowest z-position of the binding atoms
+#         if z_diff < min_z_diff:
+#             min_z_diff = z_diff
+#             optimal_angle = angle
+#             optimal_adsorbate = adsorbate_rotated
+    
+#     # Add random noise to the optimal angle
+#     # noise_strength = 3.0  # Adjust this value to control the noise level
+#     # random_noise = np.random.normal(0, noise_strength)  
+#     # optimal_angle += random_noise
+
+#     # Final rotation to optimal angle
+#     #optimal_adsorbate.rotate(optimal_angle, vector_between, center=placement_center)
+#     # optimal_adsorbate = rotate_adsorbate(chosen_adsorbate, chosen_rotvec, optimal_angle, placement_center)
+
+#     # Return the final rotated adsorbate and the rotation details
+#     return optimal_adsorbate, [chosen_rotvec, optimal_angle]
