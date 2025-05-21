@@ -13,7 +13,7 @@ from fairchem.data.oc.core.adsorbate import randomly_rotate_adsorbate, rotate_ad
 from pymatgen.analysis.adsorption import AdsorbateSiteFinder
 from pymatgen.io.ase import AseAtomsAdaptor
 from scipy.optimize import fsolve
-
+from collections import Counter
 if TYPE_CHECKING:
     import ase
     from fairchem.data.oc.core.slab import Adsorbate, Slab
@@ -266,6 +266,7 @@ class AdsorbateSlabConfig:
             all_sites = np.concatenate((random_sites, heuristic_sites))
         else:
             all_sites = heuristic_sites
+        # breakpoint()
         #####
         # need to comment out
         print('number of init candidate sites:', all_sites.shape[0])
@@ -701,8 +702,9 @@ def find_targeted_sites(slab, binding_sites, site_atoms_list, cutoff_multiplier:
                 site_binding_atoms.append(atom.symbol)
 
         # Check if the site matches the target atoms
-        if (len(site_binding_atoms) == len(site_atoms_list) and 
-            all(atom in site_binding_atoms for atom in site_atoms_list)):
+        # if (len(site_binding_atoms) == len(site_atoms_list) and 
+        #     all(atom in site_binding_atoms for atom in site_atoms_list)):
+        if Counter(site_binding_atoms) == Counter(site_atoms_list):
             targeted_sites.append(site)
-
+    # breakpoint()
     return np.array(targeted_sites)
