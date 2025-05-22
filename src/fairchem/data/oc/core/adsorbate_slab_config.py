@@ -673,8 +673,8 @@ def there_is_overlap(adsorbate_slab_config: ase.Atoms):
     post_radial_distances = get_interstitial_distances(adsorbate_slab_config)
     return not all(np.array(post_radial_distances) >= 0)
 
-def find_targeted_sites(slab, binding_sites, site_atoms_list, cutoff_multiplier: float = 1.1):
-
+def find_targeted_sites(slab, binding_sites, site_atoms_list, cutoff_multiplier: float = 1.1): #1.1
+    # breakpoint()
 
     # Ensure that the slab has properly tagged surface atoms
     assert slab.has_surface_tagged(), "The slab must have surface atoms tagged (tag == 1) for this function."
@@ -686,7 +686,7 @@ def find_targeted_sites(slab, binding_sites, site_atoms_list, cutoff_multiplier:
 
     # Loop over each binding site and find the closest atoms within the cutoff radius
     # average covalent radius for C, H, O, N 
-    avg_covalent_radii = np.mean([covalent_radii[atomic_numbers[atom]] for atom in ['C', 'H', 'O', 'N']])
+    avg_covalent_radii = np.mean([covalent_radii[atomic_numbers[atom]] for atom in ['C', 'O', 'N']]) # H removed
     # print(avg_covalent_radii)
 
     for site in binding_sites:
